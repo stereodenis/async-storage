@@ -1,6 +1,8 @@
 package org.asyncstorage.legacy_storage
 
 import android.content.Context
+import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteException
 import android.util.Log
 import androidx.room.ColumnInfo
 import androidx.room.Dao
@@ -17,6 +19,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReadableArray
+import java.io.File
 import org.json.JSONException
 import org.json.JSONObject
 
@@ -124,11 +127,27 @@ internal abstract class StorageDb : RoomDatabase() {
             val oldDbFile = context.getDatabasePath("RKStorage")
             val db = Room.databaseBuilder(context, StorageDb::class.java, DATABASE_NAME)
             if (oldDbFile.exists()) {
+                if (!context.getDatabasePath(DATABASE_NAME).exists()) {
+                    checkpointOldDatabase(oldDbFile)
+                }
                 // migrate data from old database, if it exists
                 db.createFromFile(oldDbFile).addMigrations(MIGRATION_TO_NEXT)
             }
 
             return db.build()
+        }
+
+        // The old database may use write-ahead logging (default on Android 9), while Room copies
+        // only its main file. Move everything from the WAL file there, so no data is lost.
+        private fun checkpointOldDatabase(oldDbFile: File) {
+            try {
+                SQLiteDatabase.openDatabase(oldDbFile.path, null, SQLiteDatabase.OPEN_READWRITE)
+                    .use { db ->
+                        db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).use { it.moveToFirst() }
+                    }
+            } catch (e: SQLiteException) {
+                Log.w("AsyncStorage_Next", "Could not force checkpoint on old database.", e)
+            }
         }
     }
 }
